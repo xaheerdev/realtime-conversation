@@ -10,20 +10,13 @@ const server = http.createServer(app);
 
 // Serve a quick health route
 app.get('/health', (_, res) => res.json({ ok: true }));
-
-// WebSocket endpoint for browsers
 const wss = new WebSocketServer({ server, path: '/ws' });
-console.log("wss",wss)
 
 // Helper to open a WS to OpenAI Realtime
 function openRealtimeSocket() {
   const model = process.env.REALTIME_MODEL || 'gpt-realtime'; // current generic name
-  // Realtime WS endpoint
   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
-  // Only Authorization header is required
   const headers = { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` };
-
-  // Connect upstream
   const upstream = new WebSocket(url, { headers, maxPayload: 1 << 24 });
   return upstream;
 }
@@ -36,11 +29,9 @@ wss.on('connection', (client) => {
 
   // When OpenAI socket is ready, inform browser
   upstream.on('open', () => {
-    // Wait for the initial "session.created" event and just forward everything
     sendClient({ type: 'server.ready' });
   });
 
-  // Forward every event from OpenAI → browser (you can filter if you like)
   upstream.on('message', (data) => {
     try {
       const evt = JSON.parse(data.toString());
@@ -60,14 +51,14 @@ wss.on('connection', (client) => {
     sendClient({ type: 'server.upstream_error', error: String(err) });
   });
 
-  // Browser → OpenAI forwarding
   client.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      console.log("msg", msg);
 
       // Audio chunk from browser: base64 PCM16 @ 24k
       if (msg.type === 'client.audio.append' && msg.audio) {
-        // Realtime: append audio to input buffer
+         
         sendUpstream({ type: 'input_audio_buffer.append', audio: msg.audio });
       }
 
