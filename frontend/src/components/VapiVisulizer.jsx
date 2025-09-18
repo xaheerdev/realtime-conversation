@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MicIcon, PhoneOff } from 'lucide-react';
-import useVapi from '../hooks/use-vapi';
+//import useVapi from '../hooks/use-vapi';
+import useRealtime from '../hooks/use-realtime';
 const VapiVisualizer = () => {
- const { volumeLevel, isSessionActive, toggleCall ,conversation} = useVapi();
+ const { volumeLevel, isSessionActive, toggleCall ,conversation} = useRealtime();
   const [bars, setBars] = useState(Array(50).fill(5)); 
 
  
