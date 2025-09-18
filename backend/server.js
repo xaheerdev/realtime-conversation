@@ -1,96 +1,97 @@
+// server.js
 import 'dotenv/config';
-import express from 'express';
-import http from 'http';
-import cors from 'cors';
-import { WebSocketServer, WebSocket } from 'ws';
+import OpenAI from "openai";
+const client = new OpenAI();
+import WebSocket, { WebSocketServer } from 'ws';
 
-const app = express();
-app.use(cors());
-const server = http.createServer(app);
 
-// Serve a quick health route
-app.get('/health', (_, res) => res.json({ ok: true }));
-const wss = new WebSocketServer({ server, path: '/ws' });
 
-// Helper to open a WS to OpenAI Realtime
-function openRealtimeSocket() {
-  const model = process.env.REALTIME_MODEL || 'gpt-realtime'; // current generic name
-  const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
-  const headers = { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` };
-  const upstream = new WebSocket(url, { headers, maxPayload: 1 << 24 });
-  return upstream;
-}
+const MODEL = 'gpt-4o-realtime-preview'; // or your realtime model
+
+const wss = new WebSocketServer({ port: 4000, path: '/ws' });
 
 wss.on('connection', (client) => {
-  const upstream = openRealtimeSocket();
+  const oa = new WebSocket(
+    `wss://api.openai.com/v1/realtime?model=${MODEL}`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'realtime=v1',
+      },
+    }
+  );
 
-  const sendClient = (obj) => client.readyState === 1 && client.send(JSON.stringify(obj));
-  const sendUpstream = (obj) => upstream.readyState === 1 && upstream.send(JSON.stringify(obj));
+  const safeSend = (ws, obj) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  };
 
-  // When OpenAI socket is ready, inform browser
-  upstream.on('open', () => {
-    sendClient({ type: 'server.ready' });
+  oa.on('open', () => {
+    // 1) Configure session: mic transcription + audio out as PCM16 @24k
+    safeSend(oa, {
+      type: 'session.update',
+      session: {
+        instructions: [
+          "You are a friendly interviewer.",
+          "Goal: collect key info by asking short, focused questions.",
+          "Rules:",
+          " - Ask ONE question at a time.",
+          " - Keep each question under 12 words.",
+          " - Wait for the user's speech before continuing.",
+          " - If silence > 4s, politely reprompt.",
+          "IMPORTANT: Always speak ENGLISH only. Never switch languages."
+        ].join('\n'),
+        voice: 'verse', 
+        input_audio_format: 'pcm16',
+      input_audio_transcription: {
+        model: 'whisper-1',
+        language: 'en',                
+        prompt: 'Transcribe in English only.'
+      },
+      output_audio_format: 'pcm16'
+    },
+    });
+//     safeSend(oa, {
+//   type: 'session.update',
+//   session: {
+//     instructions: "… Always speak English only …",
+//     voice: 'verse',
+//     input_audio_format: 'pcm16',
+//     input_audio_transcription: { model: 'whisper-1', language: 'en' },
+//     output_audio_format: 'pcm16',
+//   },
+// });
+
+   
+    safeSend(client, { type: 'server.ready' });
+
+    
+    safeSend(oa, {
+      type: 'response.create',
+      response: {
+        modalities: ['audio', 'text'],
+        instructions: "Greet the user in English and ask your first question now."
+      },
+    });
   });
 
-  upstream.on('message', (data) => {
+  // Browser → OpenAI
+  client.on('message', (buf) => {
     try {
-      const evt = JSON.parse(data.toString());
-      // pass-through
-      sendClient(evt);
+      if (oa.readyState === WebSocket.OPEN) oa.send(JSON.stringify(msg));
     } catch {
-      // ignore
+      console.log("oa not ready")
     }
   });
 
-  upstream.on('close', () => {
-    sendClient({ type: 'server.upstream_closed' });
-    client.close();
+  // OpenAI → Browser
+  oa.on('message', (buf) => {
+    // Forward all model events, including response.audio.delta chunks
+    if (client.readyState === WebSocket.OPEN) client.send(buf.toString())
   });
 
-  upstream.on('error', (err) => {
-    sendClient({ type: 'server.upstream_error', error: String(err) });
-  });
-
-  client.on('message', (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString());
-      console.log("msg", msg);
-
-      // Audio chunk from browser: base64 PCM16 @ 24k
-      if (msg.type === 'client.audio.append' && msg.audio) {
-         
-        sendUpstream({ type: 'input_audio_buffer.append', audio: msg.audio });
-      }
-
-      // Commit the current buffer (end of utterance)
-      if (msg.type === 'client.audio.commit') {
-        sendUpstream({ type: 'input_audio_buffer.commit' });
-      }
-
-      // Ask the model to produce a response (text by default)
-      if (msg.type === 'client.response.create') {
-        sendUpstream({
-          type: 'response.create',
-          response: { modalities: ['text'] } // you can include "audio" too
-        });
-      }
-
-      // Optional: adjust session settings (voice, VAD, etc.)
-      if (msg.type === 'client.session.update' && msg.session) {
-        sendUpstream({ type: 'session.update', session: msg.session });
-      }
-    } catch {
-      // ignore malformed
-    }
-  });
-
-  client.on('close', () => {
-    console.log("closed by client");
-    upstream.close();
-  });
-});
-
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`WS relay on http://localhost:${PORT}/ws`);
+  const closeBoth = () => { try { oa.close(); } catch {}; try { client.close(); } catch {
+    console.log("closed")
+  }; };
+  oa.on('close', closeBoth); oa.on('error', closeBoth);
+  client.on('close', closeBoth); client.on('error', closeBoth);
 });
