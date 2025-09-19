@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import dotenv from "dotenv";
 dotenv.config();
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 4001;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REALTIME_MODEL = "gpt-4o-realtime-preview-2024-12-17"; // use your enabled model
 const VOICE = process.env.REALTIME_VOICE || "alloy";
